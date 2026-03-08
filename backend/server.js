@@ -19,7 +19,7 @@ const app = express();
 app.use(helmet());
 app.use(cors({
   origin: [
-    "https://uynbd-mis.vercel.app",  // ← your Vercel URL
+    "https://uynbd-mis-frontend.vercel.app",  // ← your Vercel URL
     "http://localhost:5173"
   ]
 }));
