@@ -18,8 +18,10 @@ const app = express();
 // ─── Security Middleware ───────────────────────────────────────────────────────
 app.use(helmet());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-  credentials: true,
+  origin: [
+    "https://uynbd-mis.vercel.app",  // ← your Vercel URL
+    "http://localhost:5173"
+  ]
 }));
 
 // Rate limiting: 100 requests per 15 minutes per IP
