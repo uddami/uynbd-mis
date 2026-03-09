@@ -1,47 +1,39 @@
 /**
- * UYNBD MIS - Audit Log Service
- * 
- * All create/edit/delete/status-change actions are logged here.
- * Audit logs are IMMUTABLE - no update or delete operations allowed.
- * 
- * Usage: await auditLog(req, 'CREATE', 'Members', 'UYNBD-2024-0001', null, newData);
+ * auditLog.js
+ * ────────────
+ * Append-only audit log writer.
+ * Every create/edit/delete/status-change goes here.
+ * Audit rows can NEVER be edited or deleted via any API.
  */
 
-const { insertRow, generateId } = require('./sheets.service');
+const { appendRow } = require("./sheetsService");
+const { v4: uuidv4 } = require("uuid");
 
 /**
- * Records an audit log entry.
- * @param {Object} req - Express request (to extract user info)
- * @param {string} action - CREATE | UPDATE | DELETE | STATUS_CHANGE | LOGIN | LOGOUT
- * @param {string} module - Sheet/module name
- * @param {string} recordId - ID of the affected record
- * @param {any} oldValue - Previous value (JSON stringified)
- * @param {any} newValue - New value (JSON stringified)
- * @param {string} notes - Optional notes
+ * Write one audit log entry.
+ * @param {object} opts
+ * @param {object} opts.user        – { id, role, name }
+ * @param {string} opts.action      – e.g. "CREATE", "UPDATE", "STATUS_CHANGE", "DELETE", "UNLOCK"
+ * @param {string} opts.tableName   – sheet name, e.g. "Activities"
+ * @param {string} opts.recordId    – primary key value
+ * @param {object} opts.details     – any extra context (old vs new values, etc.)
  */
-const auditLog = async (req, action, module, recordId, oldValue = null, newValue = null, notes = '') => {
+async function writeAuditLog({ user, action, tableName, recordId, details = {} }) {
   try {
-    const user = req?.user || {};
-    const log = {
-      log_id: generateId('LOG'),
+    await appendRow("Audit_Log", {
+      log_id: uuidv4(),
       timestamp: new Date().toISOString(),
-      user_id: user.user_id || 'system',
-      user_email: user.email || 'system',
+      user_id: user?.id ?? "unknown",
+      user_role: user?.role ?? "unknown",
       action,
-      module,
-      record_id: String(recordId || ''),
-      old_value: oldValue ? JSON.stringify(oldValue).substring(0, 500) : '',
-      new_value: newValue ? JSON.stringify(newValue).substring(0, 500) : '',
-      ip_address: req?.ip || req?.connection?.remoteAddress || '',
-      notes: notes || '',
-    };
-
-    await insertRow('AuditLogs', log);
-    return log;
-  } catch (error) {
-    // Audit logging failure should NOT block the main operation
-    console.error('[AuditLog] Failed to write audit log:', error.message);
+      table_name: tableName,
+      record_id: recordId,
+      details: JSON.stringify(details),
+    });
+  } catch (err) {
+    // Audit log failure should NEVER crash the main request
+    console.error("[AuditLog] Failed to write log:", err.message);
   }
-};
+}
 
-module.exports = { auditLog };
+module.exports = { writeAuditLog };

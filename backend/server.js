@@ -1,8 +1,12 @@
 /**
- * UYNBD MIS - Express.js Server
- * 
- * Main application entry point. Configures middleware, routes, and starts server.
- * 
+ * UYNBD MIS - Express.js Server (Updated)
+ *
+ * REPLACES: backend/server.js
+ *
+ * CHANGES FROM ORIGINAL:
+ * - Added 5 new event routes (report, news, spending, unlock, news-list)
+ * - All original routes preserved exactly
+ *
  * API Base: /api/v1
  */
 
@@ -19,18 +23,17 @@ const app = express();
 app.use(helmet());
 app.use(cors({
   origin: [
-    "https://uynbd.vercel.app",
-    "https://uynbd-mis-frontend.vercel.app",
-    "http://localhost:3000",
-    "http://localhost:5173"
+    'https://uynbd.vercel.app',
+    'https://uynbd-mis-frontend.vercel.app',
+    'http://localhost:3000',
+    'http://localhost:5173',
   ],
-  credentials: true
+  credentials: true,
 }));
 
-// Rate limiting: 100 requests per 15 minutes per IP
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 500,  // increase from 100 to 500
+  max: 500,
   message: { success: false, message: 'Too many requests, please try again later' },
 });
 app.use('/api/', limiter);
@@ -43,7 +46,11 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 // ─── Import Middleware ─────────────────────────────────────────────────────────
-const { authenticate, authorize, requireDestructiveConfirmation } = require('./middleware/auth.middleware');
+const {
+  authenticate,
+  authorize,
+  requireDestructiveConfirmation,
+} = require('./middleware/auth.middleware');
 
 // ─── Import Controllers ────────────────────────────────────────────────────────
 const authController = require('./controllers/auth.controller');
@@ -52,7 +59,6 @@ const financeController = require('./controllers/finance.controller');
 const eventsController = require('./controllers/events.controller');
 const analyticsController = require('./controllers/analytics.controller');
 
-// Lazy-load remaining controllers
 const getBranchesController = () => require('./controllers/branches.controller');
 const getProjectsController = () => require('./controllers/projects.controller');
 const getDocumentsController = () => require('./controllers/documents.controller');
@@ -68,9 +74,9 @@ app.get('/health', (req, res) => {
 app.post('/api/v1/auth/login', authController.login);
 app.get('/api/v1/auth/profile', authenticate, authController.getProfile);
 app.put('/api/v1/auth/change-password', authenticate, authController.changePassword);
-app.post('/api/v1/auth/bootstrap', authController.bootstrapAdmin); // One-time only
+app.post('/api/v1/auth/bootstrap', authController.bootstrapAdmin);
 
-// ─── Member Routes (UMLT) ──────────────────────────────────────────────────────
+// ─── Member Routes ─────────────────────────────────────────────────────────────
 app.get('/api/v1/members', authenticate, authorize('members', 'read'), membersController.getMembers);
 app.get('/api/v1/members/stats', authenticate, authorize('members', 'read'), membersController.getMemberStats);
 app.get('/api/v1/members/probation-check', authenticate, authorize('members', 'write'), membersController.runProbationCheck);
@@ -82,24 +88,15 @@ app.post('/api/v1/members/:uddami_id/transfer', authenticate, authorize('members
 app.post('/api/v1/members/:uddami_id/roles', authenticate, authorize('members', 'write'), membersController.assignRole);
 app.delete('/api/v1/members/:uddami_id', authenticate, authorize('members', 'delete'), requireDestructiveConfirmation, membersController.deleteMember);
 
-// ─── Branch Routes (UBMS) ──────────────────────────────────────────────────────
-app.get('/api/v1/branches', authenticate, authorize('branches', 'read'), (req, res) => {
-  getBranchesController().getBranches(req, res);
-});
-app.get('/api/v1/branches/stats', authenticate, authorize('branches', 'read'), (req, res) => {
-  getBranchesController().getBranchStats(req, res);
-});
-app.get('/api/v1/branches/:branch_id', authenticate, authorize('branches', 'read'), (req, res) => {
-  getBranchesController().getBranch(req, res);
-});
-app.post('/api/v1/branches', authenticate, authorize('branches', 'write'), (req, res) => {
-  getBranchesController().createBranch(req, res);
-});
-app.put('/api/v1/branches/:branch_id', authenticate, authorize('branches', 'write'), (req, res) => {
-  getBranchesController().updateBranch(req, res);
-});
+// ─── Branch Routes ─────────────────────────────────────────────────────────────
+app.get('/api/v1/branches', authenticate, authorize('branches', 'read'), (req, res) => getBranchesController().getBranches(req, res));
+app.get('/api/v1/branches/stats', authenticate, authorize('branches', 'read'), (req, res) => getBranchesController().getBranchStats(req, res));
+app.get('/api/v1/branches/:branch_id', authenticate, authorize('branches', 'read'), (req, res) => getBranchesController().getBranch(req, res));
+app.post('/api/v1/branches', authenticate, authorize('branches', 'write'), (req, res) => getBranchesController().createBranch(req, res));
+app.put('/api/v1/branches/:branch_id', authenticate, authorize('branches', 'write'), (req, res) => getBranchesController().updateBranch(req, res));
 
 // ─── Event Routes ──────────────────────────────────────────────────────────────
+// ── Original routes (unchanged) ─────────────────────────────────────────────
 app.get('/api/v1/events', authenticate, authorize('events', 'read'), eventsController.getEvents);
 app.get('/api/v1/events/stats', authenticate, authorize('events', 'read'), eventsController.getEventStats);
 app.get('/api/v1/events/:event_id', authenticate, authorize('events', 'read'), eventsController.getEvent);
@@ -107,23 +104,19 @@ app.post('/api/v1/events', authenticate, authorize('events', 'write'), eventsCon
 app.put('/api/v1/events/:event_id', authenticate, authorize('events', 'write'), eventsController.updateEvent);
 app.post('/api/v1/events/:event_id/advance-status', authenticate, authorize('events', 'write'), eventsController.advanceEventStatus);
 app.post('/api/v1/events/:event_id/attendance', authenticate, authorize('events', 'write'), eventsController.recordAttendance);
+// ── NEW routes ───────────────────────────────────────────────────────────────
+app.post('/api/v1/events/:event_id/report', authenticate, authorize('events', 'write'), eventsController.uploadReport);
+app.post('/api/v1/events/:event_id/news', authenticate, authorize('events', 'write'), eventsController.addNewsCoverage);
+app.get('/api/v1/events/:event_id/news', authenticate, authorize('events', 'read'), eventsController.getNewsCoverage);
+app.post('/api/v1/events/:event_id/spending', authenticate, authorize('events', 'write'), eventsController.updateSpending);
+app.post('/api/v1/events/:event_id/unlock', authenticate, authorize('events', 'write'), eventsController.unlockEvent);
 
-// ─── Project Routes (UTPMS) ───────────────────────────────────────────────────
-app.get('/api/v1/projects', authenticate, authorize('projects', 'read'), (req, res) => {
-  getProjectsController().getProjects(req, res);
-});
-app.get('/api/v1/projects/:project_id', authenticate, authorize('projects', 'read'), (req, res) => {
-  getProjectsController().getProject(req, res);
-});
-app.post('/api/v1/projects', authenticate, authorize('projects', 'write'), (req, res) => {
-  getProjectsController().createProject(req, res);
-});
-app.put('/api/v1/projects/:project_id', authenticate, authorize('projects', 'write'), (req, res) => {
-  getProjectsController().updateProject(req, res);
-});
-app.post('/api/v1/projects/:project_id/advance-status', authenticate, authorize('projects', 'write'), (req, res) => {
-  getProjectsController().advanceProjectStatus(req, res);
-});
+// ─── Project Routes ────────────────────────────────────────────────────────────
+app.get('/api/v1/projects', authenticate, authorize('projects', 'read'), (req, res) => getProjectsController().getProjects(req, res));
+app.get('/api/v1/projects/:project_id', authenticate, authorize('projects', 'read'), (req, res) => getProjectsController().getProject(req, res));
+app.post('/api/v1/projects', authenticate, authorize('projects', 'write'), (req, res) => getProjectsController().createProject(req, res));
+app.put('/api/v1/projects/:project_id', authenticate, authorize('projects', 'write'), (req, res) => getProjectsController().updateProject(req, res));
+app.post('/api/v1/projects/:project_id/advance-status', authenticate, authorize('projects', 'write'), (req, res) => getProjectsController().advanceProjectStatus(req, res));
 
 // ─── Finance Routes ────────────────────────────────────────────────────────────
 app.get('/api/v1/finance', authenticate, authorize('finance', 'read'), financeController.getFinanceRecords);
@@ -132,54 +125,30 @@ app.get('/api/v1/finance/members/:uddami_id/status', authenticate, authorize('fi
 app.post('/api/v1/finance', authenticate, authorize('finance', 'write'), financeController.recordPayment);
 app.post('/api/v1/finance/run-status-update', authenticate, authorize('finance', 'write'), financeController.runFinanceStatusUpdate);
 
-// ─── Documents Routes (UDMS) ───────────────────────────────────────────────────
-app.get('/api/v1/documents', authenticate, authorize('documents', 'read'), (req, res) => {
-  getDocumentsController().getDocuments(req, res);
-});
-app.post('/api/v1/documents', authenticate, authorize('documents', 'write'), (req, res) => {
-  getDocumentsController().createDocument(req, res);
-});
-app.put('/api/v1/documents/:doc_id', authenticate, authorize('documents', 'write'), (req, res) => {
-  getDocumentsController().updateDocument(req, res);
-});
-app.delete('/api/v1/documents/:doc_id', authenticate, authorize('documents', 'delete'), requireDestructiveConfirmation, (req, res) => {
-  getDocumentsController().deleteDocument(req, res);
-});
+// ─── Documents Routes ──────────────────────────────────────────────────────────
+app.get('/api/v1/documents', authenticate, authorize('documents', 'read'), (req, res) => getDocumentsController().getDocuments(req, res));
+app.post('/api/v1/documents', authenticate, authorize('documents', 'write'), (req, res) => getDocumentsController().createDocument(req, res));
+app.put('/api/v1/documents/:doc_id', authenticate, authorize('documents', 'write'), (req, res) => getDocumentsController().updateDocument(req, res));
+app.delete('/api/v1/documents/:doc_id', authenticate, authorize('documents', 'delete'), requireDestructiveConfirmation, (req, res) => getDocumentsController().deleteDocument(req, res));
 
 // ─── Sponsors & Logistics Routes ───────────────────────────────────────────────
-app.get('/api/v1/sponsors', authenticate, authorize('sponsors', 'read'), (req, res) => {
-  getSponsorsController().getSponsors(req, res);
-});
-app.post('/api/v1/sponsors', authenticate, authorize('sponsors', 'write'), (req, res) => {
-  getSponsorsController().createSponsor(req, res);
-});
-app.get('/api/v1/assets', authenticate, authorize('logistics', 'read'), (req, res) => {
-  getSponsorsController().getAssets(req, res);
-});
-app.post('/api/v1/assets', authenticate, authorize('logistics', 'write'), (req, res) => {
-  getSponsorsController().createAsset(req, res);
-});
+app.get('/api/v1/sponsors', authenticate, authorize('sponsors', 'read'), (req, res) => getSponsorsController().getSponsors(req, res));
+app.post('/api/v1/sponsors', authenticate, authorize('sponsors', 'write'), (req, res) => getSponsorsController().createSponsor(req, res));
+app.get('/api/v1/assets', authenticate, authorize('logistics', 'read'), (req, res) => getSponsorsController().getAssets(req, res));
+app.post('/api/v1/assets', authenticate, authorize('logistics', 'write'), (req, res) => getSponsorsController().createAsset(req, res));
 
-// ─── Analytics Routes (UOA) ────────────────────────────────────────────────────
+// ─── Analytics Routes ──────────────────────────────────────────────────────────
 app.get('/api/v1/analytics/dashboard', authenticate, authorize('analytics', 'read'), analyticsController.getAnalyticsDashboard);
 app.get('/api/v1/analytics/branches/:branch_id', authenticate, authorize('analytics', 'read'), analyticsController.getBranchAnalytics);
 
 // ─── Audit Log Routes ──────────────────────────────────────────────────────────
 app.get('/api/v1/audit-logs', authenticate, authorize('audit', 'read'), analyticsController.getAuditLogs);
 
-// ─── User Management Routes (Super Admin only) ─────────────────────────────────
-app.get('/api/v1/users', authenticate, authorize('users', 'read'), (req, res) => {
-  getUsersController().getUsers(req, res);
-});
-app.post('/api/v1/users', authenticate, authorize('users', 'write'), (req, res) => {
-  getUsersController().createUser(req, res);
-});
-app.put('/api/v1/users/:user_id', authenticate, authorize('users', 'write'), (req, res) => {
-  getUsersController().updateUser(req, res);
-});
-app.delete('/api/v1/users/:user_id', authenticate, authorize('users', 'delete'), requireDestructiveConfirmation, (req, res) => {
-  getUsersController().deleteUser(req, res);
-});
+// ─── User Management Routes ────────────────────────────────────────────────────
+app.get('/api/v1/users', authenticate, authorize('users', 'read'), (req, res) => getUsersController().getUsers(req, res));
+app.post('/api/v1/users', authenticate, authorize('users', 'write'), (req, res) => getUsersController().createUser(req, res));
+app.put('/api/v1/users/:user_id', authenticate, authorize('users', 'write'), (req, res) => getUsersController().updateUser(req, res));
+app.delete('/api/v1/users/:user_id', authenticate, authorize('users', 'delete'), requireDestructiveConfirmation, (req, res) => getUsersController().deleteUser(req, res));
 
 // ─── 404 Handler ───────────────────────────────────────────────────────────────
 app.use((req, res) => {
@@ -200,7 +169,7 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`
   ╔══════════════════════════════════════════════╗
-  ║     UYNBD MIS Server - v1.0.0               ║
+  ║     UYNBD MIS Server - v1.1.0               ║
   ║     Running on http://localhost:${PORT}        ║
   ║     Environment: ${(process.env.NODE_ENV || 'development').padEnd(14)}        ║
   ╚══════════════════════════════════════════════╝

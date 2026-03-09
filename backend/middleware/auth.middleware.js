@@ -1,23 +1,32 @@
 /**
- * UYNBD MIS - Authentication & Authorization Middleware
- * 
+ * UYNBD MIS - Authentication & Authorization Middleware (Updated)
+ *
+ * REPLACES: backend/middleware/auth.middleware.js
+ *
+ * CHANGES FROM ORIGINAL:
+ * - Added 'project_chief' role
+ * - Expanded events.write to include branch_chief, event_chief, project_chief
+ * - Expanded projects.write to include branch_chief, project_chief
+ * - All original logic preserved exactly
+ *
  * JWT-based authentication with role-based access control (RBAC).
- * 
+ *
  * ROLES (in order of power):
- * 1. super_admin    - Full access, destructive actions need confirmation
- * 2. chairman       - Read-only analytics, cannot delete
- * 3. md             - Read-only
- * 4. administrator  - Read & entry, approve events/projects
- * 5. finance_director - Read & entry on finance module only
- * 6. logistics_director - Read & entry on logistics only
- * 7. branch_chief   - Read-only for their own branch
- * 8. event_chief    - Read-only for assigned events
+ * 1. super_admin         - Full access
+ * 2. chairman            - Read-only analytics, cannot delete
+ * 3. md                  - Read-only
+ * 4. administrator       - Read & entry, approve events/projects
+ * 5. finance_director    - Read & entry on finance module only
+ * 6. logistics_director  - Read & entry on logistics only
+ * 7. branch_chief        - Read + create activities for their branch
+ * 8. event_chief         - Read + create events
+ * 9. project_chief       - Read + create projects (NEW)
  */
 
 const jwt = require('jsonwebtoken');
 const { findOne } = require('../services/sheets.service');
 
-// ─── Role Hierarchy & Permissions ─────────────────────────────────────────────
+// ─── Role Constants ────────────────────────────────────────────────────────────
 const ROLES = {
   SUPER_ADMIN: 'super_admin',
   CHAIRMAN: 'chairman',
@@ -27,9 +36,10 @@ const ROLES = {
   LOGISTICS_DIRECTOR: 'logistics_director',
   BRANCH_CHIEF: 'branch_chief',
   EVENT_CHIEF: 'event_chief',
+  PROJECT_CHIEF: 'project_chief', // NEW
 };
 
-// Permissions: module -> allowed roles and their access level
+// ─── Module Permissions ────────────────────────────────────────────────────────
 const MODULE_PERMISSIONS = {
   members: {
     read: ['super_admin', 'chairman', 'md', 'administrator', 'branch_chief'],
@@ -42,14 +52,30 @@ const MODULE_PERMISSIONS = {
     delete: ['super_admin'],
   },
   events: {
-    read: ['super_admin', 'chairman', 'md', 'administrator', 'branch_chief', 'event_chief'],
-    write: ['super_admin', 'administrator'],
+    // READ: all roles with system access
+    read: [
+      'super_admin', 'chairman', 'md', 'administrator',
+      'branch_chief', 'event_chief', 'project_chief',
+    ],
+    // WRITE: expanded – branch_chief, event_chief, project_chief can now create
+    write: [
+      'super_admin', 'administrator',
+      'branch_chief', 'event_chief', 'project_chief',
+    ],
+    // APPROVE: administrators only
     approve: ['super_admin', 'administrator'],
     delete: ['super_admin'],
   },
   projects: {
-    read: ['super_admin', 'chairman', 'md', 'administrator', 'branch_chief'],
-    write: ['super_admin', 'administrator'],
+    read: [
+      'super_admin', 'chairman', 'md', 'administrator',
+      'branch_chief', 'project_chief',
+    ],
+    // WRITE: expanded – branch_chief, project_chief can now create
+    write: [
+      'super_admin', 'administrator',
+      'branch_chief', 'project_chief',
+    ],
     approve: ['super_admin', 'administrator'],
     delete: ['super_admin'],
   },
@@ -59,7 +85,10 @@ const MODULE_PERMISSIONS = {
     delete: ['super_admin'],
   },
   documents: {
-    read: ['super_admin', 'chairman', 'md', 'administrator', 'branch_chief'],
+    read: [
+      'super_admin', 'chairman', 'md', 'administrator',
+      'branch_chief',
+    ],
     write: ['super_admin', 'administrator'],
     delete: ['super_admin'],
     lock: ['super_admin', 'administrator'],
@@ -153,8 +182,7 @@ const authorize = (module, action = 'read') => {
   };
 };
 
-// ─── Middleware: Super Admin Destructive Action Confirmation ──────────────────
-// For delete operations, require explicit confirmation header
+// ─── Middleware: Destructive Action Confirmation ──────────────────────────────
 const requireDestructiveConfirmation = (req, res, next) => {
   const confirmation = req.headers['x-destructive-confirm'];
   if (confirmation !== 'CONFIRMED') {
@@ -166,7 +194,7 @@ const requireDestructiveConfirmation = (req, res, next) => {
   next();
 };
 
-// ─── Check if user has specific permission (for inline checks) ────────────────
+// ─── Inline Permission Check ──────────────────────────────────────────────────
 const hasPermission = (role, module, action) => {
   const permissions = MODULE_PERMISSIONS[module];
   if (!permissions) return false;
