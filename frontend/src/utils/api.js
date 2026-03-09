@@ -1,6 +1,12 @@
 /**
- * UYNBD MIS - API Service Layer
- * Centralized Axios instance with auth token injection and error handling.
+ * UYNBD MIS - API Service Layer (Updated)
+ *
+ * REPLACES: frontend/src/utils/api.js
+ *
+ * CHANGES FROM ORIGINAL:
+ * - Added 5 new methods to eventsAPI:
+ *     uploadReport, addNews, getNews, updateSpending, unlock
+ * - All original code unchanged
  */
 
 import axios from 'axios';
@@ -76,6 +82,7 @@ export const branchesAPI = {
 
 // ─── Events API ────────────────────────────────────────────────────────────────
 export const eventsAPI = {
+  // ── Original methods (unchanged) ──────────────────────────────────────────
   getAll: (params) => api.get('/events', { params }),
   getStats: () => api.get('/events/stats'),
   getOne: (id) => api.get(`/events/${id}`),
@@ -83,6 +90,12 @@ export const eventsAPI = {
   update: (id, data) => api.put(`/events/${id}`, data),
   advanceStatus: (id, data) => api.post(`/events/${id}/advance-status`, data),
   recordAttendance: (id, data) => api.post(`/events/${id}/attendance`, data),
+  // ── New methods ───────────────────────────────────────────────────────────
+  uploadReport: (id, data) => api.post(`/events/${id}/report`, data),
+  addNews: (id, data) => api.post(`/events/${id}/news`, data),
+  getNews: (id) => api.get(`/events/${id}/news`),
+  updateSpending: (id, data) => api.post(`/events/${id}/spending`, data),
+  unlock: (id, data) => api.post(`/events/${id}/unlock`, data),
 };
 
 // ─── Projects API ──────────────────────────────────────────────────────────────

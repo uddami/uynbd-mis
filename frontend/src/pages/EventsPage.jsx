@@ -13,9 +13,9 @@
  * - Locked event indicator
  */
 
-import React, { useState, useEffect, useContext } from 'react';
-import { AuthContext } from '../context/AuthContext';
-import { api } from '../utils/api';
+import React, { useState, useEffect } from 'react';
+import { useAuth } from '../context/AuthContext';
+import { eventsAPI, branchesAPI } from '../utils/api';
 
 // ── Roles that can CREATE events ─────────────────────────────────────────────
 const CREATE_ROLES = ['super_admin', 'administrator', 'branch_chief', 'event_chief', 'project_chief'];
@@ -152,9 +152,9 @@ function EventFormModal({ userRole, branches, onClose, onSaved, editEvent = null
         external_organization: String(form.external_organization),
       };
       if (isEdit) {
-        await api.put(`/events/${editEvent.event_id}`, payload);
+        await eventsAPI.update(editEvent.event_id, payload);
       } else {
-        await api.post('/events', payload);
+        await eventsAPI.create(payload);
       }
       onSaved();
     } catch (err) {
@@ -310,8 +310,8 @@ function EventDetail({ event, userRole, onClose, onRefresh }) {
   const nextStatus = EVENT_LIFECYCLE[EVENT_LIFECYCLE.indexOf(event.status) + 1];
 
   useEffect(() => {
-    api.get(`/events/${event.event_id}/news`)
-      .then((r) => setNewsRecords(r.data.data || []))
+    eventsAPI.getNews(event.event_id)
+      .then((r) => setNewsRecords(r.data || []))
       .catch(() => {});
   }, [event.event_id]);
 
@@ -324,7 +324,7 @@ function EventDetail({ event, userRole, onClose, onRefresh }) {
     }
     setLoading(true);
     try {
-      await api.post(`/events/${event.event_id}/advance-status`, {});
+      await eventsAPI.advanceStatus(event.event_id, {});
       showMessage(`✓ Status updated to ${nextStatus}`);
       onRefresh();
     } catch (err) {
@@ -336,7 +336,7 @@ function EventDetail({ event, userRole, onClose, onRefresh }) {
     if (!reportUrl.trim()) return;
     setLoading(true);
     try {
-      await api.post(`/events/${event.event_id}/report`, { pdf_report_url: reportUrl });
+      await eventsAPI.uploadReport(event.event_id, { pdf_report_url: reportUrl });
       showMessage('✓ Report URL saved.');
       onRefresh();
     } catch (err) {
@@ -351,10 +351,10 @@ function EventDetail({ event, userRole, onClose, onRefresh }) {
     }
     setLoading(true);
     try {
-      await api.post(`/events/${event.event_id}/news`, newsForm);
+      await eventsAPI.addNews(event.event_id, newsForm);
       setNewsForm({ media_name: '', coverage_link: '', coverage_date: '' });
-      const r = await api.get(`/events/${event.event_id}/news`);
-      setNewsRecords(r.data.data || []);
+      const r = await eventsAPI.getNews(event.event_id);
+      setNewsRecords(r.data || []);
       showMessage('✓ Coverage added.');
       onRefresh();
     } catch (err) {
@@ -365,7 +365,7 @@ function EventDetail({ event, userRole, onClose, onRefresh }) {
   const handleUpdateSpending = async () => {
     setLoading(true);
     try {
-      await api.post(`/events/${event.event_id}/spending`, { total_spendings: spendingAmount });
+      await eventsAPI.updateSpending(event.event_id, { total_spendings: spendingAmount });
       showMessage('✓ Spending updated.');
       onRefresh();
     } catch (err) {
@@ -377,7 +377,7 @@ function EventDetail({ event, userRole, onClose, onRefresh }) {
     if (!window.confirm('Unlock this completed event? Attendance and spending will be editable again.')) return;
     setLoading(true);
     try {
-      await api.post(`/events/${event.event_id}/unlock`, { reason: 'Admin unlock via UI' });
+      await eventsAPI.unlock(event.event_id, { reason: 'Admin unlock via UI' });
       showMessage('✓ Event unlocked.');
       onRefresh();
     } catch (err) {
@@ -554,7 +554,7 @@ function EventDetail({ event, userRole, onClose, onRefresh }) {
 // Main Events Page
 // ─────────────────────────────────────────────────────────────────────────────
 export default function EventsPage() {
-  const { user } = useContext(AuthContext);
+  const { user } = useAuth();
   const [events, setEvents] = useState([]);
   const [branches, setBranches] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -569,12 +569,12 @@ export default function EventsPage() {
   const fetchEvents = async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (filterStatus) params.append('status', filterStatus);
-      if (filterType) params.append('event_type', filterType);
-      if (search) params.append('search', search);
-      const res = await api.get(`/events?${params.toString()}`);
-      setEvents(res.data.data || []);
+      const params = {};
+      if (filterStatus) params.status = filterStatus;
+      if (filterType) params.event_type = filterType;
+      if (search) params.search = search;
+      const res = await eventsAPI.getAll(params);
+      setEvents(res.data || []);
     } catch (err) {
       console.error('Failed to fetch events', err);
     } finally {
@@ -584,7 +584,9 @@ export default function EventsPage() {
 
   useEffect(() => {
     fetchEvents();
-    api.get('/branches').then((r) => setBranches(r.data.data || [])).catch(() => {});
+    branchesAPI.getAll()
+      .then((r) => setBranches(r.data || []))
+      .catch(() => {});
   }, [filterStatus, filterType]);
 
   const handleSearch = (e) => {
@@ -681,9 +683,8 @@ export default function EventsPage() {
           onClose={() => setSelectedEvent(null)}
           onRefresh={() => {
             fetchEvents();
-            // Refresh the selected event detail too
-            api.get(`/events/${selectedEvent.event_id}`)
-              .then((r) => setSelectedEvent(r.data.data))
+            eventsAPI.getOne(selectedEvent.event_id)
+              .then((r) => setSelectedEvent(r.data))
               .catch(() => setSelectedEvent(null));
           }}
         />
