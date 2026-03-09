@@ -19,9 +19,12 @@ const app = express();
 app.use(helmet());
 app.use(cors({
   origin: [
-    "https://uynbd.vercel.app",  // ← your Vercel URL
+    "https://uynbd.vercel.app",
+    "https://uynbd-mis-frontend.vercel.app",
+    "http://localhost:3000",
     "http://localhost:5173"
-  ]
+  ],
+  credentials: true
 }));
 
 // Rate limiting: 100 requests per 15 minutes per IP
