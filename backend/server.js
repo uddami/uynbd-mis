@@ -24,9 +24,9 @@ app.use(helmet());
 app.use(cors({
   origin: [
     'https://uynbd.vercel.app',
+    'https://uynbd-mis-frontend.vercel.app',
     'http://localhost:3000',
     'http://localhost:5173',
-    'http://localhost:5000',
   ],
   credentials: true,
 }));
