@@ -1,210 +1,276 @@
 /**
- * UYNBD MIS - Express.js Server
+ * UYNBD MIS - Google Sheets Service
  * 
- * Main application entry point. Configures middleware, routes, and starts server.
+ * Provides generic CRUD operations on top of the Google Sheets API.
+ * All modules use this service to interact with the "database."
  * 
- * API Base: /api/v1
+ * ARCHITECTURE NOTE:
+ * - Each sheet = a table; Row 1 = headers; Rows 2+ = data
+ * - Reads: fetches all rows, converts to objects using header row
+ * - Writes: appends rows or updates by finding the row index first
+ * - Filtering/sorting done in-memory (acceptable up to ~5000 rows per sheet)
  */
 
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const morgan = require('morgan');
-const rateLimit = require('express-rate-limit');
+const { getSheetsClient, SPREADSHEET_ID, COLUMNS } = require('../config/sheets.config');
+const { v4: uuidv4 } = require('uuid');
 
-const app = express();
+// ─── Simple In-Memory Cache ───────────────────────────────────────────────────
+const cache = {};
+const CACHE_TTL_MS = 60 * 1000; // 1 minute
 
-// ─── Security Middleware ───────────────────────────────────────────────────────
-app.use(helmet());
-app.use(cors({
-  origin: [
-    "https://uynbd.vercel.app",
-    "https://uynbd-mis-frontend.vercel.app",
-    "http://localhost:3000",
-    "http://localhost:5173"
-  ],
-  credentials: true
-}));
+const getCached = (sheetName) => {
+  const entry = cache[sheetName];
+  if (entry && Date.now() - entry.timestamp < CACHE_TTL_MS) {
+    return entry.data;
+  }
+  return null;
+};
 
-// Rate limiting: 100 requests per 15 minutes per IP
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 500,  // increase from 100 to 500
-  message: { success: false, message: 'Too many requests, please try again later' },
-});
-app.use('/api/', limiter);
+const setCached = (sheetName, data) => {
+  cache[sheetName] = { data, timestamp: Date.now() };
+};
 
-// ─── Body & Logging Middleware ─────────────────────────────────────────────────
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
-if (process.env.NODE_ENV !== 'test') {
-  app.use(morgan('combined'));
-}
+const invalidateCache = (sheetName) => {
+  delete cache[sheetName];
+};
 
-// ─── Import Middleware ─────────────────────────────────────────────────────────
-const { authenticate, authorize, requireDestructiveConfirmation } = require('./middleware/auth.middleware');
+// ─── Read All Rows from a Sheet ───────────────────────────────────────────────
+/**
+ * Reads all data rows from a sheet and returns array of objects.
+ * @param {string} sheetName - Name of the sheet tab
+ * @returns {Array<Object>} Array of row objects keyed by header values
+ */
+const readSheet = async (sheetName) => {
+  try {
+    // Return cached data if available
+    const cached = getCached(sheetName);
+    if (cached) return cached;
 
-// ─── Import Controllers ────────────────────────────────────────────────────────
-const authController = require('./controllers/auth.controller');
-const membersController = require('./controllers/members.controller');
-const financeController = require('./controllers/finance.controller');
-const eventsController = require('./controllers/events.controller');
-const analyticsController = require('./controllers/analytics.controller');
+    const sheets = await getSheetsClient();
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID(),
+      range: `${sheetName}!A:ZZ`,
+    });
 
-// Lazy-load remaining controllers
-const getBranchesController = () => require('./controllers/branches.controller');
-const getProjectsController = () => require('./controllers/projects.controller');
-const getDocumentsController = () => require('./controllers/documents.controller');
-const getSponsorsController = () => require('./controllers/sponsors.controller');
-const getUsersController = () => require('./controllers/users.controller');
+    const rows = response.data.values;
+    if (!rows || rows.length < 2) {
+      setCached(sheetName, []);
+      return [];
+    }
 
-// ─── Health Check ──────────────────────────────────────────────────────────────
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString(), version: '1.0.0' });
-});
+    const headers = rows[0];
+    const data = rows.slice(1).map((row) => {
+      const obj = {};
+      headers.forEach((header, i) => {
+        obj[header] = row[i] !== undefined ? row[i] : '';
+      });
+      return obj;
+    });
 
-// ─── Auth Routes ───────────────────────────────────────────────────────────────
-app.post('/api/v1/auth/login', authController.login);
-app.get('/api/v1/auth/profile', authenticate, authController.getProfile);
-app.put('/api/v1/auth/change-password', authenticate, authController.changePassword);
-app.post('/api/v1/auth/bootstrap', authController.bootstrapAdmin); // One-time only
+    setCached(sheetName, data);
+    return data;
+  } catch (error) {
+    console.error(`[SheetsService] Error reading ${sheetName}:`, error.message);
+    throw new Error(`Failed to read ${sheetName}: ${error.message}`);
+  }
+};
 
-// ─── Member Routes (UMLT) ──────────────────────────────────────────────────────
-app.get('/api/v1/members', authenticate, authorize('members', 'read'), membersController.getMembers);
-app.get('/api/v1/members/stats', authenticate, authorize('members', 'read'), membersController.getMemberStats);
-app.get('/api/v1/members/probation-check', authenticate, authorize('members', 'write'), membersController.runProbationCheck);
-app.get('/api/v1/members/:uddami_id', authenticate, authorize('members', 'read'), membersController.getMember);
-app.post('/api/v1/members', authenticate, authorize('members', 'write'), membersController.createMember);
-app.put('/api/v1/members/:uddami_id', authenticate, authorize('members', 'write'), membersController.updateMember);
-app.post('/api/v1/members/:uddami_id/promote', authenticate, authorize('members', 'write'), membersController.promoteMember);
-app.post('/api/v1/members/:uddami_id/transfer', authenticate, authorize('members', 'write'), membersController.transferMember);
-app.post('/api/v1/members/:uddami_id/roles', authenticate, authorize('members', 'write'), membersController.assignRole);
-app.delete('/api/v1/members/:uddami_id', authenticate, authorize('members', 'delete'), requireDestructiveConfirmation, membersController.deleteMember);
+// ─── Find Single Row by Field Value ───────────────────────────────────────────
+const findOne = async (sheetName, field, value) => {
+  const rows = await readSheet(sheetName);
+  return rows.find((row) => row[field] === String(value)) || null;
+};
 
-// ─── Branch Routes (UBMS) ──────────────────────────────────────────────────────
-app.get('/api/v1/branches', authenticate, authorize('branches', 'read'), (req, res) => {
-  getBranchesController().getBranches(req, res);
-});
-app.get('/api/v1/branches/stats', authenticate, authorize('branches', 'read'), (req, res) => {
-  getBranchesController().getBranchStats(req, res);
-});
-app.get('/api/v1/branches/:branch_id', authenticate, authorize('branches', 'read'), (req, res) => {
-  getBranchesController().getBranch(req, res);
-});
-app.post('/api/v1/branches', authenticate, authorize('branches', 'write'), (req, res) => {
-  getBranchesController().createBranch(req, res);
-});
-app.put('/api/v1/branches/:branch_id', authenticate, authorize('branches', 'write'), (req, res) => {
-  getBranchesController().updateBranch(req, res);
-});
+// ─── Find Multiple Rows by Field Value ────────────────────────────────────────
+const findMany = async (sheetName, filters = {}) => {
+  const rows = await readSheet(sheetName);
+  return rows.filter((row) =>
+    Object.entries(filters).every(([key, val]) => row[key] === String(val))
+  );
+};
 
-// ─── Event Routes ──────────────────────────────────────────────────────────────
-app.get('/api/v1/events', authenticate, authorize('events', 'read'), eventsController.getEvents);
-app.get('/api/v1/events/stats', authenticate, authorize('events', 'read'), eventsController.getEventStats);
-app.get('/api/v1/events/:event_id', authenticate, authorize('events', 'read'), eventsController.getEvent);
-app.post('/api/v1/events', authenticate, authorize('events', 'write'), eventsController.createEvent);
-app.put('/api/v1/events/:event_id', authenticate, authorize('events', 'write'), eventsController.updateEvent);
-app.post('/api/v1/events/:event_id/advance-status', authenticate, authorize('events', 'write'), eventsController.advanceEventStatus);
-app.post('/api/v1/events/:event_id/attendance', authenticate, authorize('events', 'write'), eventsController.recordAttendance);
+// ─── Append a New Row ─────────────────────────────────────────────────────────
+/**
+ * Appends a new row to the sheet. Column order follows COLUMNS config.
+ * @param {string} sheetName
+ * @param {Object} data - Key-value object of column:value pairs
+ * @returns {Object} The inserted row with auto-generated timestamps
+ */
+const insertRow = async (sheetName, data) => {
+  try {
+    const sheets = await getSheetsClient();
 
-// ─── Project Routes (UTPMS) ───────────────────────────────────────────────────
-app.get('/api/v1/projects', authenticate, authorize('projects', 'read'), (req, res) => {
-  getProjectsController().getProjects(req, res);
-});
-app.get('/api/v1/projects/:project_id', authenticate, authorize('projects', 'read'), (req, res) => {
-  getProjectsController().getProject(req, res);
-});
-app.post('/api/v1/projects', authenticate, authorize('projects', 'write'), (req, res) => {
-  getProjectsController().createProject(req, res);
-});
-app.put('/api/v1/projects/:project_id', authenticate, authorize('projects', 'write'), (req, res) => {
-  getProjectsController().updateProject(req, res);
-});
-app.post('/api/v1/projects/:project_id/advance-status', authenticate, authorize('projects', 'write'), (req, res) => {
-  getProjectsController().advanceProjectStatus(req, res);
-});
+    // Auto-populate timestamps if not provided
+    const now = new Date().toISOString();
+    if (!data.created_at) data.created_at = now;
+    if (COLUMNS[sheetName.toUpperCase().replace(/\s/g, '_')]?.includes('updated_at')) {
+      data.updated_at = now;
+    }
 
-// ─── Finance Routes ────────────────────────────────────────────────────────────
-app.get('/api/v1/finance', authenticate, authorize('finance', 'read'), financeController.getFinanceRecords);
-app.get('/api/v1/finance/dashboard', authenticate, authorize('finance', 'read'), financeController.getFinanceDashboard);
-app.get('/api/v1/finance/members/:uddami_id/status', authenticate, authorize('finance', 'read'), financeController.getMemberFinanceStatus);
-app.post('/api/v1/finance', authenticate, authorize('finance', 'write'), financeController.recordPayment);
-app.post('/api/v1/finance/run-status-update', authenticate, authorize('finance', 'write'), financeController.runFinanceStatusUpdate);
+    // Get headers to determine column order
+    const headerRes = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID(),
+      range: `${sheetName}!1:1`,
+    });
 
-// ─── Documents Routes (UDMS) ───────────────────────────────────────────────────
-app.get('/api/v1/documents', authenticate, authorize('documents', 'read'), (req, res) => {
-  getDocumentsController().getDocuments(req, res);
-});
-app.post('/api/v1/documents', authenticate, authorize('documents', 'write'), (req, res) => {
-  getDocumentsController().createDocument(req, res);
-});
-app.put('/api/v1/documents/:doc_id', authenticate, authorize('documents', 'write'), (req, res) => {
-  getDocumentsController().updateDocument(req, res);
-});
-app.delete('/api/v1/documents/:doc_id', authenticate, authorize('documents', 'delete'), requireDestructiveConfirmation, (req, res) => {
-  getDocumentsController().deleteDocument(req, res);
-});
+    const headers = headerRes.data.values?.[0] || [];
+    const rowValues = headers.map((h) => data[h] !== undefined ? String(data[h]) : '');
 
-// ─── Sponsors & Logistics Routes ───────────────────────────────────────────────
-app.get('/api/v1/sponsors', authenticate, authorize('sponsors', 'read'), (req, res) => {
-  getSponsorsController().getSponsors(req, res);
-});
-app.post('/api/v1/sponsors', authenticate, authorize('sponsors', 'write'), (req, res) => {
-  getSponsorsController().createSponsor(req, res);
-});
-app.get('/api/v1/assets', authenticate, authorize('logistics', 'read'), (req, res) => {
-  getSponsorsController().getAssets(req, res);
-});
-app.post('/api/v1/assets', authenticate, authorize('logistics', 'write'), (req, res) => {
-  getSponsorsController().createAsset(req, res);
-});
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID(),
+      range: `${sheetName}!A:A`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [rowValues] },
+    });
 
-// ─── Analytics Routes (UOA) ────────────────────────────────────────────────────
-app.get('/api/v1/analytics/dashboard', authenticate, authorize('analytics', 'read'), analyticsController.getAnalyticsDashboard);
-app.get('/api/v1/analytics/branches/:branch_id', authenticate, authorize('analytics', 'read'), analyticsController.getBranchAnalytics);
+    // Invalidate cache so next read gets fresh data
+    invalidateCache(sheetName);
 
-// ─── Audit Log Routes ──────────────────────────────────────────────────────────
-app.get('/api/v1/audit-logs', authenticate, authorize('audit', 'read'), analyticsController.getAuditLogs);
+    return data;
+  } catch (error) {
+    console.error(`[SheetsService] Error inserting into ${sheetName}:`, error.message);
+    throw new Error(`Failed to insert into ${sheetName}: ${error.message}`);
+  }
+};
 
-// ─── User Management Routes (Super Admin only) ─────────────────────────────────
-app.get('/api/v1/users', authenticate, authorize('users', 'read'), (req, res) => {
-  getUsersController().getUsers(req, res);
-});
-app.post('/api/v1/users', authenticate, authorize('users', 'write'), (req, res) => {
-  getUsersController().createUser(req, res);
-});
-app.put('/api/v1/users/:user_id', authenticate, authorize('users', 'write'), (req, res) => {
-  getUsersController().updateUser(req, res);
-});
-app.delete('/api/v1/users/:user_id', authenticate, authorize('users', 'delete'), requireDestructiveConfirmation, (req, res) => {
-  getUsersController().deleteUser(req, res);
-});
+// ─── Update an Existing Row ───────────────────────────────────────────────────
+/**
+ * Updates a row where idField matches idValue.
+ * Finds the row index first, then updates only changed cells.
+ */
+const updateRow = async (sheetName, idField, idValue, updates) => {
+  try {
+    const sheets = await getSheetsClient();
 
-// ─── 404 Handler ───────────────────────────────────────────────────────────────
-app.use((req, res) => {
-  res.status(404).json({ success: false, message: `Route ${req.method} ${req.path} not found` });
-});
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID(),
+      range: `${sheetName}!A:ZZ`,
+    });
 
-// ─── Error Handler ─────────────────────────────────────────────────────────────
-app.use((err, req, res, next) => {
-  console.error('[Server Error]', err);
-  res.status(500).json({
-    success: false,
-    message: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message,
+    const rows = response.data.values;
+    if (!rows || rows.length < 2) throw new Error('Sheet is empty');
+
+    const headers = rows[0];
+    const idColIndex = headers.indexOf(idField);
+    if (idColIndex === -1) throw new Error(`Column ${idField} not found`);
+
+    const rowIndex = rows.findIndex((row, i) => i > 0 && row[idColIndex] === String(idValue));
+    if (rowIndex === -1) throw new Error(`Record with ${idField}=${idValue} not found`);
+
+    // Merge updates into existing row
+    const existingRow = [...rows[rowIndex]];
+    updates.updated_at = new Date().toISOString();
+
+    Object.entries(updates).forEach(([key, val]) => {
+      const colIdx = headers.indexOf(key);
+      if (colIdx !== -1) existingRow[colIdx] = String(val);
+    });
+
+    // Pad to header length
+    while (existingRow.length < headers.length) existingRow.push('');
+
+    const sheetRowNumber = rowIndex + 1; // 1-indexed, headers at row 1 so data at row 2+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID(),
+      range: `${sheetName}!A${sheetRowNumber}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [existingRow] },
+    });
+
+    // Invalidate cache so next read gets fresh data
+    invalidateCache(sheetName);
+
+    const updatedObj = {};
+    headers.forEach((h, i) => { updatedObj[h] = existingRow[i] || ''; });
+    return updatedObj;
+  } catch (error) {
+    console.error(`[SheetsService] Error updating ${sheetName}:`, error.message);
+    throw new Error(`Failed to update ${sheetName}: ${error.message}`);
+  }
+};
+
+// ─── Delete a Row (Mark as Deleted, Soft Delete) ──────────────────────────────
+/**
+ * Soft deletes by setting status to 'deleted' and adding deleted_at timestamp.
+ * Hard delete is only available for Super Admin via hardDeleteRow.
+ */
+const softDeleteRow = async (sheetName, idField, idValue) => {
+  return updateRow(sheetName, idField, idValue, {
+    status: 'deleted',
+    deleted_at: new Date().toISOString(),
   });
-});
+};
 
-// ─── Start Server ──────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`
-  ╔══════════════════════════════════════════════╗
-  ║     UYNBD MIS Server - v1.0.0               ║
-  ║     Running on http://localhost:${PORT}        ║
-  ║     Environment: ${(process.env.NODE_ENV || 'development').padEnd(14)}        ║
-  ╚══════════════════════════════════════════════╝
-  `);
-});
+// Hard delete - removes the actual row (Super Admin only)
+const hardDeleteRow = async (sheetName, idField, idValue) => {
+  try {
+    const sheets = await getSheetsClient();
 
-module.exports = app;
+    // Get sheet metadata to find sheetId
+    const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID() });
+    const sheet = meta.data.sheets.find(
+      (s) => s.properties.title === sheetName
+    );
+    if (!sheet) throw new Error(`Sheet ${sheetName} not found`);
+    const sheetId = sheet.properties.sheetId;
+
+    // Find row index
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID(),
+      range: `${sheetName}!A:ZZ`,
+    });
+    const rows = response.data.values;
+    const headers = rows[0];
+    const idColIndex = headers.indexOf(idField);
+    const rowIndex = rows.findIndex((row, i) => i > 0 && row[idColIndex] === String(idValue));
+    if (rowIndex === -1) throw new Error('Record not found');
+
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID(),
+      requestBody: {
+        requests: [{
+          deleteDimension: {
+            range: {
+              sheetId,
+              dimension: 'ROWS',
+              startIndex: rowIndex,
+              endIndex: rowIndex + 1,
+            },
+          },
+        }],
+      },
+    });
+
+    // Invalidate cache
+    invalidateCache(sheetName);
+
+    return { deleted: true };
+  } catch (error) {
+    console.error(`[SheetsService] Hard delete error:`, error.message);
+    throw new Error(`Failed to hard delete: ${error.message}`);
+  }
+};
+
+// ─── Generate Sequential ID ───────────────────────────────────────────────────
+const generateUddamiId = async (year) => {
+  const members = await readSheet('Members');
+  const yearMembers = members.filter(m => m.uddami_id?.includes(String(year)));
+  const seq = String(yearMembers.length + 1).padStart(4, '0');
+  return `UYNBD-${year}-${seq}`;
+};
+
+const generateId = (prefix) => {
+  return `${prefix}-${uuidv4().split('-')[0].toUpperCase()}`;
+};
+
+module.exports = {
+  readSheet,
+  findOne,
+  findMany,
+  insertRow,
+  updateRow,
+  softDeleteRow,
+  hardDeleteRow,
+  generateUddamiId,
+  generateId,
+};
