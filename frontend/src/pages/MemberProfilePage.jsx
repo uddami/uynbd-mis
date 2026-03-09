@@ -10,6 +10,17 @@ import {
 import { format, parseISO, differenceInYears, differenceInMonths } from 'date-fns';
 import toast from 'react-hot-toast';
 
+// Converts any Google Drive share link to a directly embeddable image URL
+const getDriveImageUrl = (url) => {
+  if (!url) return null;
+  if (url.includes('uc?export=view')) return url;
+  const fileMatch = url.match(/\/file\/d\/([-\w]{25,})/);
+  if (fileMatch) return `https://drive.google.com/uc?export=view&id=${fileMatch[1]}`;
+  const idMatch = url.match(/[?&]id=([-\w]{25,})/);
+  if (idMatch) return `https://drive.google.com/uc?export=view&id=${idMatch[1]}`;
+  return url;
+};
+
 export default function MemberProfilePage() {
   const { uddami_id } = useParams();
   const navigate = useNavigate();
@@ -114,8 +125,9 @@ export default function MemberProfilePage() {
           {/* Photo */}
           {member.photo_url ? (
             <img
-              src={member.photo_url} alt={member.full_name}
+              src={getDriveImageUrl(member.photo_url)} alt={member.full_name}
               className="w-24 h-24 rounded-2xl object-cover border-2 border-white/10"
+              onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }}
             />
           ) : (
             <div className="w-24 h-24 rounded-2xl bg-brand-600/20 border-2 border-brand-500/20 flex items-center justify-center flex-shrink-0">
